@@ -1,0 +1,183 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Models">
+      <UniqueIdentifier>{93da631a-a1f1-4f78-a465-17d2457d82be}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="AI">
+      <UniqueIdentifier>{55040942-4a1d-43b1-adf0-fd0b208db9c7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Simulation">
+      <UniqueIdentifier>{99c237ed-90a0-412c-a68d-3905d06013e1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Painting">
+      <UniqueIdentifier>{943ba850-8f56-4e65-b5f2-0a54cb91626c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="States">
+      <UniqueIdentifier>{1df11a66-e377-46ef-b3be-50055f41e886}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Grid.cpp">
+      <Filter>Models</Filter>
+    </ClCompile>
+    <ClCompile Include="Units.cpp">
+      <Filter>Models</Filter>
+    </ClCompile>
+    <ClCompile Include="Renderer.cpp">
+      <Filter>Painting</Filter>
+    </ClCompile>
+    <ClCompile Include="Commander.cpp">
+      <Filter>Models</Filter>
+    </ClCompile>
+    <ClCompile Include="Warrior.cpp">
+      <Filter>Models</Filter>
+    </ClCompile>
+    <ClCompile Include="SecurityMap.cpp">
+      <Filter>Simulation</Filter>
+    </ClCompile>
+    <ClCompile Include="Visibility.cpp">
+      <Filter>AI</Filter>
+    </ClCompile>
+    <ClCompile Include="Combat.cpp">
+      <Filter>AI</Filter>
+    </ClCompile>
+    <ClCompile Include="Pathfinding.cpp">
+      <Filter>AI</Filter>
+    </ClCompile>
+    <ClCompile Include="StateMachine.cpp">
+      <Filter>AI</Filter>
+    </ClCompile>
+    <ClCompile Include="State_Idle.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_MovingToTarget.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_Attacking.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_Defending.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_Healing.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_Supplying.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_RetreatingToCover.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_WaitingForMedic.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_RefillAtDepot.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+    <ClCompile Include="State_WaitingForSupport.cpp">
+      <Filter>States</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Definitions.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Grid.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Units.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Renderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Commander.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Warrior.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Medic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Supplier.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SecurityMap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Visibility.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Combat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Pathfinding.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AIEvents.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="EventBus.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Orders.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="StateMachine.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_Idle.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Globals.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_MovingToTarget.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_Attacking.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_Defending.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_Healing.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_Supplying.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_RetreatingToCover.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_WaitingForMedic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_RefillAtDepot.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="State_WaitingForSupport.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

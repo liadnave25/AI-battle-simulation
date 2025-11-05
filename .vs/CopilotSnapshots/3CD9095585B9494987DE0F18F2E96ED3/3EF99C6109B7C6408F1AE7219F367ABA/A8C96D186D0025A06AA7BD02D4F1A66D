@@ -1,0 +1,554 @@
+﻿#include "Commander.h"
+#include <algorithm> // For std::remove_if, std::find_if
+#include <cstdlib>   // For std::rand
+#include <cstdio>    // For std::printf
+#include <unordered_set>
+#include <unordered_map>
+#include <string>    // For std::string in teamTag
+#include <typeinfo>  // For typeid in issueOrder skip message (optional)
+
+
+ // Include necessary headers for states, combat, globals, etc.
+#include "Combat.h"
+#include "StateMachine.h"
+#include "State.h" // Needed for GetCurrentState()->CanReport()
+#include "State_Attacking.h"
+#include "State_Defending.h"
+#include "State_GoToWarehouse.h"
+#include "State_MovingToTarget.h"
+#include "State_Idle.h"
+#include "Globals.h" // Access g_units, g_grid, g_smap
+#include "Visibility.h" // Needed for FightAsWarrior
+
+using namespace AI;
+using Definitions::Team;
+using Definitions::Role; // Make Role enum directly accessible
+
+// --------------------------- Tunables ---------------------------
+static constexpr int ENEMY_TTL_FRAMES = 360; // How long enemy info persists (6 seconds)
+static constexpr int MERGE_DIST2 = 2 * 2;   // Merge enemy sightings within 2 cells (squared distance)
+
+// File-local frame counter to avoid relying on an external g_frameCounter symbol
+static int s_frameCounter = 0;
+
+// --------------------------- Helpers ---------------------------
+
+// Find a unit pointer by its ID in the global list
+static inline Models::Unit* findUnitById(int uid) {
+    if (uid <= 0) return nullptr;
+    // Use std::find_if for potentially cleaner search
+    auto it = std::find_if(g_units.begin(), g_units.end(), [uid](const Models::Unit& u) { return u.id == uid; });
+    return (it != g_units.end()) ? &(*it) : nullptr;
+}
+
+// Check if a cell column is in "our half" of the map
+static inline bool isOurHalf(int /*r*/, int c, int gridSize, Team team) {
+    // Adjusted to work for both teams
+    if (team == Team::Blue) {
+        return c < (gridSize / 2); // Blue is on the left
+    }
+    else {
+        return c >= (gridSize / 2); // Orange is on the right
+    }
+}
+
+// Get a string tag for the team (for logging)
+static inline const char* teamTag(Team t) {
+   return (t == Team::Blue ? "Blue" : "Orange");
+}
+
+// --------------------------- Subscriptions ---------------------------
+
+// Subscribe the commander to relevant events on the EventBus
+void Commander::initSubscriptions() {
+    // Subscribe to broadcast messages (key -1)
+    EventBus::instance().subscribe(-1, [this](const Message& m) {
+        onMessage(m); // Call the onMessage handler
+        });
+    // Subscribe to messages sent directly TO this commander's unit ID
+    if (unitId > 0) {
+        EventBus::instance().subscribe(unitId, [this](const Message& m) {
+            // Handle direct messages if needed (e.g., specific orders from game logic)
+            onMessage(m); // Can use the same handler or a different one
+            });
+    }
+}
+
+// Handles incoming messages from the EventBus
+void Commander::onMessage(const Message& m) {
+    // Ignore messages from the enemy team, unless it's an EnemySighted event?
+    // Current logic: Ignore *all* events not from our team.
+    if (m.fromUnitId > 0) {
+        if (auto* src = findUnitById(m.fromUnitId)) {
+            if (src->team != myTeam) return;
+        }
+        else {
+            return; // Ignore if sender doesn't exist
+        }
+    }
+
+    // Use if/else chain instead of switch to avoid case-scope initialization issues
+    if (m.type == EventType::EnemySighted) {
+        bool merged = false;
+        bool moved = false;
+        // Check if this sighting is close to an existing known enemy
+        for (auto& s : knownEnemies) {
+            int dr = s.row - m.row, dc = s.col - m.col;
+            int d2 = dr * dr + dc * dc;
+            if (d2 <= MERGE_DIST2) {
+                moved = (d2 > 0);
+                s.row = m.row; s.col = m.col;
+                // Update timestamp using file-local commander frame counter
+                s.lastSeenFrame = s_frameCounter; // Update timestamp
+                merged = true;
+                break;
+            }
+        }
+        // If not merged, add as a new sighting
+        if (!merged) {
+            knownEnemies.push_back({ m.row, m.col, s_frameCounter });
+            std::printf("[CMD/%s] EnemySighted at (%d,%d)\n", teamTag(myTeam), m.row, m.col);
+        }
+        else if (moved) {
+            // Optional: Log enemy movement update
+            // std::printf("[CMD/%s] EnemyMoved to (%d,%d)\n", teamTag(myTeam), m.row, m.col);
+        }
+    }
+    else if (m.type == EventType::UnderFire) {
+        // Add unit ID if not already present
+        if (std::find(underFireUnits.begin(), underFireUnits.end(), m.fromUnitId) == underFireUnits.end()) {
+            underFireUnits.push_back(m.fromUnitId);
+            std::printf("[CMD/%s] Unit %d reports UNDER FIRE.\n", teamTag(myTeam), m.fromUnitId);
+        }
+    }
+    else if (m.type == EventType::LowAmmo) {
+        if (std::find(lowAmmoUnits.begin(), lowAmmoUnits.end(), m.fromUnitId) == lowAmmoUnits.end()) {
+            lowAmmoUnits.push_back(m.fromUnitId);
+            std::printf("[CMD/%s] Unit %d reports LOW AMMO.\n", teamTag(myTeam), m.fromUnitId);
+        }
+    }
+    else if (m.type == EventType::Injured) {
+        if (std::find(injuredUnits.begin(), injuredUnits.end(), m.fromUnitId) == injuredUnits.end()) {
+            // Only add if the injury reported is critical enough (HP sent in m.extra)
+            // The warrior only sends Injured event when HP <= HP_MAX/3 or HP <= HP_CRITICAL
+            // So any Injured event received here implies need for attention.
+            // We prioritize critical ones later in decideAndIssueOrders if needed.
+            injuredUnits.push_back(m.fromUnitId);
+            std::printf("[CMD/%s] Unit %d reports INJURED (HP: %d).\n", teamTag(myTeam), m.fromUnitId, m.extra);
+        }
+    }
+    else {
+        // Ignore other event types
+    }
+}
+
+// --------------------------- Anti-Spam Helpers ---------------------------
+
+// Check if the same order was issued recently
+bool Commander::shouldIssueNow(const Models::Unit* u, const Order& o, int frameCounter) const {
+    if (!u) return false;
+    auto it = m_lastOrders.find(u->id);
+    if (it == m_lastOrders.end()) return true; // No previous order
+
+    const auto& cached = it->second;
+
+    // If identical order within cooldown period
+    if (sameOrder(cached.order, o) &&
+        cached.frameIssued >= 0 &&
+        (frameCounter - cached.frameIssued) < ORDER_COOLDOWN_FRAMES)
+    {
+        return false; // Spamming, don't issue
+    }
+    return true; // OK
+}
+
+// Store the last issued order for a unit
+void Commander::rememberIssued(const Models::Unit* u, const Order& o, int frameCounter) {
+    if (!u) return;
+    m_lastOrders[u->id] = CachedOrder{ o, frameCounter };
+}
+
+// --------------------------- Orders ---------------------------
+
+// Issues an order to a unit (changes state, publishes event)
+void Commander::issueOrder(Models::Unit* u, const Order& o, int frameCounter) {
+    if (!u || !u->isAlive || !u->m_fsm) return; // Basic validation
+
+    if (u->team != myTeam) {
+        std::printf("[CMD/%s] ERROR: Tried to issue order to enemy unit #%d!\n", teamTag(myTeam), u->id);
+        return;
+    }
+
+    // Don't interrupt critical states (retreating/waiting) with tactical orders
+    AI::State* currentState = u->m_fsm->GetCurrentState();
+    if (currentState && !currentState->CanReport()) {
+        if (o.type == OrderType::AttackTo || o.type == OrderType::DefendAt || o.type == OrderType::MoveTo) {
+            // Optional log:
+            std::printf("[CMD/%s] SKIP order %d for Unit#%d, unit is busy (%s).\n",
+                teamTag(myTeam), (int)o.type, u->id, typeid(*currentState).name());
+            return;
+        }
+    }
+
+    // Check anti-spam cooldown
+    if (!shouldIssueNow(u, o, frameCounter)) {
+        return;
+    }
+
+    // Publish event
+    EventBus::instance().publish(Message{
+        EventType::OrderIssued, /*from*/-1, /*to*/u->id, o.row, o.col, (int)o.type
+        });
+
+    // Log the order
+    std::printf("[CMD/%s] -> Unit#%d (%c) Order=%d Target=(%d,%d) TargetUnit=%d\n",
+        teamTag(myTeam), u->id, u->roleLetter(),
+        (int)o.type, o.row, o.col, o.targetUnitId);
+
+    // Get combat system access
+    extern Combat::System g_combat; // Assumes global access
+
+    // Change the unit's state
+    switch (o.type) {
+    case OrderType::AttackTo:
+        u->m_fsm->ChangeState(new State_Attacking(o.row, o.col, &g_combat));
+        break;
+    case OrderType::DefendAt:
+        u->m_fsm->ChangeState(new State_Defending(o.row, o.col));
+        break;
+    case OrderType::Heal: // Issued TO a Medic
+        u->m_fsm->ChangeState(new State_GoToWarehouse(Role::Medic, o.targetUnitId));
+        break;
+    case OrderType::Resupply: // Issued TO a Supplier
+        u->m_fsm->ChangeState(new State_GoToWarehouse(Role::Supplier, o.targetUnitId));
+        break;
+    case OrderType::MoveTo:
+        u->m_fsm->ChangeState(new State_MovingToTarget(o.row, o.col, new State_Idle()));
+        break;
+    default:
+        u->m_fsm->ChangeState(new State_Idle());
+        break;
+    }
+
+    // Remember for anti-spam
+    rememberIssued(u, o, frameCounter);
+}
+
+// --------------------------- Decision Making ---------------------------
+
+// Main decision logic loop
+void Commander::decideAndIssueOrders(std::vector<Models::Unit*>& myTeamPtrs,
+    std::vector<Models::Unit*>& /*enemies*/, // Currently unused
+    int frameCounter)
+{
+    // 1. Determine primary attack target (most recent sighting)
+    int targetR = -1, targetC = -1;
+    if (!knownEnemies.empty()) {
+        // Find sighting with largest frameCounter (most recent)
+        int mostRecentFrame = -1;
+        for (const auto& info : knownEnemies) {
+            if (info.lastSeenFrame > mostRecentFrame) {
+                mostRecentFrame = info.lastSeenFrame;
+                targetR = info.row;
+                targetC = info.col;
+            }
+        }
+    }
+
+    std::unordered_set<int> reservedIds; // Units assigned a task this cycle
+
+    // 2. Handle Tactical Retreats (Highest Priority)
+    if (!underFireUnits.empty()) {
+        int unitId = underFireUnits.front(); // Process one unit under fire per cycle
+        underFireUnits.erase(underFireUnits.begin());
+
+        Models::Unit* unit = findUnitById(unitId);
+        // Ensure unit is valid and not already retreating/waiting
+        if (unit && unit->isAlive && unit->m_fsm->GetCurrentState() && unit->m_fsm->GetCurrentState()->CanReport()) {
+            std::printf("[CMD/%s] Unit#%d is UNDER FIRE. Issuing Defend order near (%d,%d).\n",
+                teamTag(myTeam), unit->id, unit->row, unit->col);
+            Order o{ OrderType::DefendAt, unit->row, unit->col }; // Anchor defend at current spot
+            issueOrder(unit, o, frameCounter);
+            reservedIds.insert(unit->id); // Mark as busy
+        }
+        // If unit was already retreating, issueOrder skips it. If dead, findUnitById returns null.
+    }
+
+    // 3. Handle Logistics (Medium Priority)
+    Models::Unit* availableMedic = nullptr;
+    Models::Unit* availableSupplier = nullptr;
+
+    // Find available support units (idle, not reserved)
+    for (auto* u : myTeamPtrs) {
+        if (!u || !u->isAlive || u->team != myTeam || reservedIds.count(u->id)) continue;
+        if (u->m_fsm && u->m_fsm->GetCurrentState() && u->m_fsm->GetCurrentState()->CanReport()) { // Check if interruptible
+            if (u->role == Role::Medic && !availableMedic)    availableMedic = u;
+            if (u->role == Role::Supplier && !availableSupplier) availableSupplier = u;
+        }
+    }
+
+    // Assign Medic task
+    if (!injuredUnits.empty() && availableMedic) {
+        int injId = injuredUnits.front(); // Get first injured unit ID
+        Models::Unit* injuredUnit = findUnitById(injId);
+        // Check if injured unit is valid and potentially still needs help
+        if (injuredUnit && injuredUnit->isAlive /* && injuredUnit->stats.hp < Definitions::HP_MAX */) {
+            injuredUnits.erase(injuredUnits.begin()); // Remove from queue
+            issueOrder(availableMedic, Order{ OrderType::Heal, -1, -1, injId }, frameCounter);
+            reservedIds.insert(availableMedic->id); // Mark medic busy
+            availableMedic = nullptr; // Only one task per medic per cycle
+        }
+        else {
+            // Invalid request (unit died or already healed?) - remove from queue
+            injuredUnits.erase(injuredUnits.begin());
+        }
+    }
+
+    // Assign Supplier task
+    if (!lowAmmoUnits.empty() && availableSupplier) {
+        int needyId = lowAmmoUnits.front();
+        Models::Unit* needyUnit = findUnitById(needyId);
+        if (needyUnit && needyUnit->isAlive /* && needyUnit->stats.ammo < Definitions::AMMO_INIT */) {
+            lowAmmoUnits.erase(lowAmmoUnits.begin());
+            issueOrder(availableSupplier, Order{ OrderType::Resupply, -1, -1, needyId }, frameCounter);
+            reservedIds.insert(availableSupplier->id);
+            availableSupplier = nullptr;
+        }
+        else {
+            lowAmmoUnits.erase(lowAmmoUnits.begin());
+        }
+    }
+
+    // 4. Handle Default Actions for remaining combat units (Lowest Priority)
+    for (auto* u : myTeamPtrs) {
+        if (!u || !u->isAlive || u->team != myTeam) continue;
+        if (reservedIds.count(u->id)) continue; // Skip busy units
+
+        // Only issue tactical orders to Warriors (and Commander if fighting - handled in tick)
+        if (u->role == Role::Warrior) {
+            Order o{};
+            if (targetR != -1) { // Enemy sighted? Attack!
+                o.type = OrderType::AttackTo; o.row = targetR; o.col = targetC;
+            }
+            else if (hasAnchor()) { // No enemy? Defend anchor.
+                o.type = OrderType::DefendAt; o.row = anchorR; o.col = anchorC;
+            }
+            else { // No enemy, no anchor? Move to center (fallback).
+                o.type = OrderType::MoveTo;   o.row = Definitions::GRID_SIZE / 2; o.col = Definitions::GRID_SIZE / 2;
+            }
+            issueOrder(u, o, frameCounter);
+            // Don't reserve here, allow multiple warriors to get the same attack/defend order
+        }
+        else if (u->role == Role::Commander && hasAnchor() && (u->row != anchorR || u->col != anchorC)) {
+            // If commander has an anchor and isn't there, issue a move order (low priority)
+            Order o{ OrderType::MoveTo, anchorR, anchorC };
+            issueOrder(u, o, frameCounter);
+            reservedIds.insert(u->id); // Reserve commander so it doesn't get other orders
+        }
+        // Medics and Suppliers without tasks just remain Idle (their Idle state handles self-resupply)
+    }
+}
+
+
+// --------------------------- Commander Tick ---------------------------
+
+// Main update function for the commander
+void Commander::tick(Models::Grid& map,
+    std::vector<Models::Unit*>& myTeamPtrs,
+    std::vector<Models::Unit*>& enemyPtrs,
+    int frameCounter)
+{
+    // update file-local frame counter
+    s_frameCounter = frameCounter;
+
+    // --- Contingency: Check if commander should fight ---
+    Models::Unit* self = findUnitById(this->unitId);
+    if (self && self->isFighting) {
+        FightAsWarrior(); // Act like a warrior
+        return;           // Skip normal command logic
+    }
+
+    // --- Normal Operation ---
+
+    // 1. Update known enemy information (remove old sightings)
+    // Use the passed-in frameCounter for timing
+    knownEnemies.erase(
+        std::remove_if(knownEnemies.begin(), knownEnemies.end(),
+            [frameCounter](const EnemyInfo& e) { return (frameCounter - e.lastSeenFrame) > ENEMY_TTL_FRAMES; }),
+        knownEnemies.end()
+    );
+
+    // If no enemies are currently alive on the enemy team, clear sightings
+    bool enemiesExist = false;
+    for (const auto* en : enemyPtrs) { if (en && en->isAlive) { enemiesExist = true; break; } }
+    if (!enemiesExist) {
+        knownEnemies.clear();
+    }
+
+    // 2. Re-evaluate safety of the defensive anchor point periodically
+    safetyMonitor([&](int r, int c) { return g_smap.at(r, c); }, frameCounter, map);
+
+    // 3. Make decisions and issue orders (throttled)
+    // Adjust frequency as needed (e.g., % 15 for 4 times/sec, % 60 for 1 time/sec)
+    if (frameCounter % 30 == 0) { // Make decisions roughly twice per second
+        decideAndIssueOrders(myTeamPtrs, enemyPtrs, frameCounter);
+    }
+}
+
+
+#define USE_FIGHT_LOGIC 1
+// --------------------------- Commander Fighting Logic ---------------------------
+
+// Logic for when the commander unit is forced to fight
+void Commander::FightAsWarrior() {
+    Models::Unit* self = findUnitById(this->unitId);
+    if (!self || !self->isAlive || !self->m_fsm) return;
+
+    // Simplified Warrior Logic (similar to Medic/Supplier fighting in Idle):
+    // 1. Self-Preservation/Resupply (Commander doesn't have these needs defined)
+    // 2. Find Target -> Attack?
+    // 3. No Target -> Idle?
+
+    // Find nearest visible enemy
+    int er = -1, ec = -1;
+    float nearestDistSq = 1e9f;
+    const int R2 = Definitions::SIGHT_RANGE * Definitions::SIGHT_RANGE;
+
+    for (const auto& other : g_units) { // Search all units
+        if (!other.isAlive || other.team == self->team) continue;
+        int dr = other.row - self->row;
+        int dc = other.col - self->col;
+        float distSq = float(dr * dr + dc * dc);
+        if (distSq > R2 || distSq >= nearestDistSq) continue;
+        if (!AI::Visibility::HasLineOfSight(g_grid, self->row, self->col, other.row, other.col)) continue;
+
+        nearestDistSq = distSq;
+        er = other.row;
+        ec = other.col;
+    }
+
+    // Decide action
+    extern Combat::System g_combat; // Access combat system
+
+    AI::State* currentState = self->m_fsm->GetCurrentState();
+    bool alreadyAttacking = dynamic_cast<State_Attacking*>(currentState) != nullptr;
+    bool alreadyIdle = dynamic_cast<State_Idle*>(currentState) != nullptr;
+
+    if (er != -1) {
+        // Enemy sighted - Attack if not already doing so
+        if (!alreadyAttacking) {
+            std::printf("[CMD/%s] FIGHTING MODE (Unit %d): Enemy at (%d,%d). Engaging.\n", teamTag(myTeam), self->id, er, ec);
+            self->m_fsm->ChangeState(new State_Attacking(er, ec, &g_combat));
+        }
+        // If already attacking, State_Attacking::Update handles it
+    }
+    else {
+        // No enemy in sight - Go Idle if not already Idle
+        if (!alreadyIdle) {
+            std::printf("[CMD/%s] FIGHTING MODE (Unit %d): No enemy. Holding position.\n", teamTag(myTeam), self->id);
+            self->m_fsm->ChangeState(new State_Idle());
+        }
+    }
+}
+
+
+// --------------------------- Anchor / Safety ---------------------------
+
+// Selects a random, walkable, low-risk cell in the team's half
+bool Commander::selectDefensiveAnchor(const Models::Grid& map,
+    const std::function<float(int, int)>& riskAt)
+{
+    const int gridSize = Definitions::GRID_SIZE;
+    int   bestR = -1, bestC = -1;
+    float bestRisk = 1e9f; // Start with high risk
+
+    // Try finding a SAFE spot first
+    for (int k = 0; k < ANCHOR_RETRIES; ++k) {
+        const int r = std::rand() % gridSize;
+        const int c = std::rand() % gridSize;
+        if (!AI::Pathfinding::inPlayfield(r, c)) continue;
+        if (!isOurHalf(r, c, gridSize, myTeam)) continue; // Check correct half
+        if (!AI::Pathfinding::IsWalkableForMovement(map.at(r, c))) continue;
+        // Consider allowing occupied cells for anchor selection?
+        // if (AI::Pathfinding::IsOccupied(r, c)) continue;
+
+        const float risk = riskAt(r, c);
+        if (risk <= SAFE_RISK_MAX && risk < bestRisk) {
+            bestRisk = risk; bestR = r; bestC = c;
+            if (bestRisk <= 0.05f) break; // Very safe, stop early
+        }
+    }
+    // Fallback: If no SAFE spot, find the LEAST DANGEROUS spot
+    if (bestR < 0) {
+        bestRisk = 1e9f; // Reset bestRisk for fallback search
+        for (int k = 0; k < ANCHOR_RETRIES; ++k) {
+            const int r = std::rand() % gridSize;
+            const int c = std::rand() % gridSize;
+            if (!AI::Pathfinding::inPlayfield(r, c)) continue;
+            if (!isOurHalf(r, c, gridSize, myTeam)) continue;
+            if (!AI::Pathfinding::IsWalkableForMovement(map.at(r, c))) continue;
+            // if (AI::Pathfinding::IsOccupied(r, c)) continue;
+
+            const float risk = riskAt(r, c);
+            if (risk < bestRisk) { // Find minimum risk
+                bestRisk = risk; bestR = r; bestC = c;
+            }
+        }
+    }
+
+    // Set the anchor if found
+    if (bestR >= 0) {
+        anchorR = bestR; anchorC = bestC;
+        printf("[CMD/%s] Selected new anchor at (%d,%d), Risk=%.2f\n", teamTag(myTeam), anchorR, anchorC, bestRisk);
+        return true;
+    }
+    printf("[CMD/%s] Failed to select anchor!\n", teamTag(myTeam));
+    return false;
+}
+
+
+// Periodically checks if the current anchor is still safe
+bool Commander::safetyMonitor(const std::function<float(int, int)>& riskAt,
+    int frameCounter,
+    const Models::Grid& map)
+{
+    // Check only periodically
+    if (frameCounter % SAFE_RECHECK_INTERVAL != 0) return false;
+
+    // If no anchor exists, try to select one
+    if (!hasAnchor()) {
+        if (selectDefensiveAnchor(map, riskAt)) {
+            lastReanchorFrame = frameCounter; // Set timestamp
+            return true; // Anchor was selected/changed
+        }
+        return false; // Failed to select anchor
+    }
+
+    // Check risk at current anchor
+    const float currentRisk = riskAt(anchorR, anchorC);
+    const float threshold = SAFE_RISK_MAX + SAFE_HYSTERESIS; // Allow slightly higher risk
+
+    // If anchor is unsafe AND cooldown has passed
+    if (currentRisk > threshold && (frameCounter - lastReanchorFrame) >= REANCHOR_COOLDOWN_FRAMES) {
+        printf("[CMD/%s] Anchor (%d,%d) unsafe (Risk=%.2f > %.2f threshold). Selecting new anchor.\n",
+            teamTag(myTeam), anchorR, anchorC, currentRisk, threshold);
+        // Try to select a new anchor
+        if (selectDefensiveAnchor(map, riskAt)) {
+            lastReanchorFrame = frameCounter; // Update timestamp
+            return true; // Anchor changed
+        }
+        else {
+            // Failed to find a *new* safe anchor, maybe stay put?
+            printf("[CMD/%s] Failed to find a *new* safer anchor, staying at (%d,%d) for now.\n",
+                teamTag(myTeam), anchorR, anchorC);
+            // Reset cooldown so we try again sooner?
+            lastReanchorFrame = frameCounter - REANCHOR_COOLDOWN_FRAMES / 2;
+        }
+    }
+    return false; // Anchor is safe or cooldown active or failed to find replacement
+}
+
+// Set the commander's unit ID (called from main)
+void Commander::setUnitId(int id) {
+    this->unitId = id;
+}
