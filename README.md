@@ -1,240 +1,110 @@
-Tactical AI Simulation (C++ / OpenGL & GLUT)
+# Tactical AI Simulation (C++ / OpenGL & FreeGLUT)
 
-A grid-based real-time tactics sandbox featuring autonomous units, a commander AI that issues orders, simple ballistics (bullets & grenades), line-of-sight visibility, and a “security map” risk field—rendered with OpenGL via FreeGLUT.
+A grid‑based real‑time tactics sandbox written in modern C++. Two teams (**Blue** vs **Orange**) fight over a 2D world. Each team fields a **Commander**, **Warriors**, **Medic**, and **Supplier**. The simulation features line‑of‑sight, a risk field (“Security Map”), simple ballistics (bullets & grenades), an event bus for AI signals, and a finite‑state machine for per‑unit behavior. Rendering is done with OpenGL via **FreeGLUT** and **GLEW**.
 
-On launch you’ll see “PRESS K TO START THE MATCH”; toggle the commander AI with K. 
+> On launch you’ll see a debug HUD with FPS, grid info, and counts. Toggle the commander AI with **K** to start the match.
 
-main
+---
 
-✨ Features
+## ✨ Features
 
-120×120 world grid with cell-sized rendering and fixed-timestep simulation. 
+- **120×120 world grid** with cell‑sized rendering and fixed timestep update.
+- **Unit roles** with distinct logic and stats: Commander, Warrior, Medic, Supplier.
+- **Commander AI**: scans the battlefield, assigns orders (heal/supply/move/engage) and prevents thrashing with locks/cooldowns.
+- **Autonomy fallback**: If a commander is down, warriors continue fighting under local logic.
+- **Event Bus**: decoupled AI messaging (e.g., CommanderDown, EnemySighted, LowAmmo, Injured).
+- **Line‑of‑Sight & Visibility**: per‑unit LOS and team visibility accumulation (ray‑stepping).
+- **Security Map**: a risk field that influences decisions and can be visualized as an overlay.
+- **Ballistics & Effects**: bullets as points; grenades with overlay (shadow/glow) and area damage.
+- **Debug overlays & HUD**: toggle visibility/security/none; role letters and team coloring.
 
-Definitions
+---
 
-Unit roles: Commander, Warrior, Medic, Supplier—each with role-specific stats/behaviors and HUD role letters. 
+## 🎮 Controls
 
-Definitions
+- **K** — Toggle Commander AI (ENABLED/OFF).
+- **Left Click** — Set/mark a target cell for context.
+- **Right Click** — Toggle **Security Map** overlay (visibility overlay auto‑hides when security is on).
+- **X** — Simulate Blue commander down (watch autonomy kick in).
+- **O** — Simulate Orange commander down.
+- **N** — New world when the match is over.
+- **E** — Exit.
 
- 
+---
 
-Units
+## 🧱 Notable Tunables (see `Definitions.h`)
 
-Commander AI that monitors injured/low-ammo units and assigns Medics/Suppliers accordingly, with lock/cooldowns to avoid thrashing. 
+- Grid/cell/time: `GRID_SIZE = 120`, `CELL_PX = 8`, `TICK_MS = 16`
+- Ranges: `SIGHT_RANGE`, `FIRE_RANGE`, `GRENADE_RANGE`
+- Role stats: HP, damage, ammo counts, heal/supply thresholds
+- Colors & HUD flags
 
-Commander
+These constants provide quick balance knobs without digging through gameplay code.
 
- 
+---
 
-Commander
+## 📁 Project Structure (high‑level)
 
- 
+- `main.cpp` — App entry, GLUT setup, world builder, input handling, per‑frame simulation.
+- `Renderer.{h,cpp}` — Grid, units, HUD, and overlays (Security/Visibility).
+- `Combat.{h,cpp}` — Bullets/grenades simulation and overlay rendering.
+- `Visibility.{h,cpp}` — LOS queries & team visibility aggregation.
+- `SecurityMap.{h,cpp}` — Risk field generation and utilities.
+- `Commander.{h,cpp}` — Central brain that issues orders to supports/warriors.
+- `Units.{h,cpp}`, `Warrior.{h,cpp}`, `Medic.h`, `Supplier.h` — Unit model & role logic.
+- `State*` — FSM states (Idle, MovingToTarget, Attacking, Defending, Healing, WaitingForMedic/Support, RetreatingToCover, Supplying, RefillAtDepot, etc.).
+- `EventBus.h`, `AIEvents.h` — Lightweight pub/sub for gameplay events.
+- `Definitions.h`, `Globals.h` — Enums, tunables, and shared constants.
 
-Commander
+---
 
-Autonomy fallback: If a team’s commander dies, its Warriors switch to autonomous behavior; if Warriors die, the Commander joins the fight. 
+## 🛠️ Build & Run (Windows + Visual Studio)
 
-main
+**Requirements**
+- Visual Studio 2019/2022 (C++17 or later)
+- OpenGL, **FreeGLUT**, **GLEW**
+- This repository already includes the needed headers/libs:  
+  `glut.h`, `freeglut.h` (+ `freeglut_ext.h`, `freeglut_std.h`), `glew.h`, and libraries `freeglut.lib`, `glew32.lib`/`glew32s.lib`.
 
-Event bus for decoupled AI messaging (e.g., “CommanderDown”, “LowAmmo”, “Injured”). 
+**Steps**
+1. Open the provided `.vcxproj` in Visual Studio.
+2. Ensure **Additional Include Directories** include the repo path with `glut.h`, `freeglut_*.h`, `glew.h`.
+3. Link against the libraries:  
+   - Dynamic GLEW: `glew32.lib` (and ship `glew32.dll`), or  
+   - Static GLEW: `glew32s.lib` (define `GLEW_STATIC` in preprocessor).  
+   Also link `freeglut.lib` and the usual Windows OpenGL libs (`opengl32.lib`, optionally `glu32.lib` if used).
+4. Build & Run. The window size defaults to `GRID_SIZE * CELL_PX`. Use the controls above to play and to toggle overlays.
 
-EventBus
+**Notes**
+- If you swap to system‑installed FreeGLUT/GLEW, ensure CRT settings match your build (avoid mixed static/dynamic CRT issues).
+- If you see a black window, verify that a valid OpenGL context is created and that GLEW is initialized **after** the context is current.
 
-Line-of-sight visibility and team visibility builders (Bresenham-style ray stepping). 
+---
 
-Visibility
+## 🚀 Quick Start (Gameplay)
 
- 
+1. Run the app.
+2. Press **K** to let Commanders start issuing orders.
+3. Use **Left Click** to set a contextual target, **Right Click** to visualize the **Security Map**.
+4. Use **X/O** to simulate “commander down” scenarios and observe autonomy/contingency behaviors.
 
-Visibility
+---
 
-Security Map risk field cast from map borders/lanes to influence tactics. 
+## 🧪 Development Tips
 
-SecurityMap
+- Keep balance changes inside `Definitions.h` to iterate quickly.
+- Toggle overlays to visually debug pathing, LOS, and risk exposure.
+- Use the state classes (`State_*`) to add or tweak behaviors in isolation.
 
- 
+---
 
-SecurityMap
+## 📜 License
 
-Ballistics & effects: bullets as points; grenades with shadow + glow sprites drawn in overlay. 
+Choose a license (MIT, Apache‑2.0, BSD‑2‑Clause). Open an issue or PR and I’ll add it to the repo.
 
-Combat
+---
 
- 
+## 🙌 Credits
 
-Combat
-
-Heads-up display and role badges for teams; overlay rendering paths (security/visibility/none). 
-
-Renderer
-
- 
-
-main
-
-🧠 How it works (quick tour)
-
-Main loop & GLUT callbacks: display, idle, mouse, keyboard, reshape are registered in main() using FreeGLUT. 
-
-main
-
-Rendering: Painting::Render* draws the grid, units, and optional overlays (HUD/Security/Visibility). 
-
-Renderer
-
-Commander AI: Ticks every frame when enabled, scans status lists, and issues state transitions (e.g., State_Healing, State_Supplying, State_RefillAtDepot). 
-
-Commander
-
- 
-
-Commander
-
-Autonomous supports: Event-driven behaviors for Medics/Suppliers when not under commander control. 
-
-Units
-
-Game flow: Victory when one side loses all Warriors; frame counter/HUD printed periodically. 
-
-main
-
- 
-
-main
-
-🎮 Controls
-
-K — Toggle Commander AI (shows “ENABLED/OFF” in console). 
-
-main
-
-Left mouse — Set a target cell (prints “Target set to (r,c)”). 
-
-main
-
-Right mouse — Toggle Security Map overlay (auto-hides Visibility overlay). 
-
-main
-
-When game over: N — new world; E — exit. 
-
-main
-
-Test keys:
-
-X — kill Blue commander and auto-enable Blue Warriors. 
-
-main
-
-O — kill Orange commander and auto-enable Orange Warriors. 
-
-main
-
-🧱 World & balance knobs
-
-A few notable constants (see Definitions.h):
-
-Grid/cell/time: GRID_SIZE=120, CELL_PX=8, TICK_MS=16 
-
-Definitions
-
-Ranges: SIGHT_RANGE=140, FIRE_RANGE=24, GRENADE_RANGE=18 
-
-Definitions
-
-Damage/ammos/heal/supply thresholds for each role are centralized here. 
-
-Definitions
-
-🛠️ Build & Run
-
-Toolchain: Windows + Visual Studio (project files included), C++17+, OpenGL
-Dependencies: FreeGLUT and GLEW headers/libs are provided in the repo (freeglut_*.h/.lib, glew.h, glew32*.lib). 
-
-freeglut
-
- 
-
-glew
-
-Open the Visual Studio solution/project (.vcxproj included) and make sure the headers in this repo are on your include path (glut.h, freeglut_*.h, glew.h). 
-
-glut
-
-Link the provided libraries (freeglut.lib, glew32.lib or glew32s.lib depending on static/dynamic config). 
-
-glew
-
-Build > Run. The app creates a window sized to the world (GRID_SIZE * CELL_PX) and registers GLUT callbacks. 
-
-main
-
-Note: If you swap to your system’s FreeGLUT/GLEW, ensure matching CRT settings on Windows to avoid atexit/CRT mismatch issues. 
-
-freeglut_std
-
-📁 Project layout (major components)
-
-main.cpp — App entry, GLUT setup, world builder, input handling, per-frame simulation. 
-
-main
-
-Renderer.{h,cpp} — Grid, units, overlays (HUD/Security/Visibility) drawing. 
-
-Renderer
-
-Combat.{h,cpp} — Bullets/grenades simulation and overlay rendering. 
-
-Combat
-
-Visibility.{h,cpp} — LOS queries and team visibility accumulation. 
-
-Visibility
-
-SecurityMap.{h,cpp} — Risk field generation. 
-
-SecurityMap
-
-Commander.{h,cpp} — Centralized AI issuing orders to supports/warriors. 
-
-Commander
-
-Units.{h,cpp}, Warrior.{h,cpp}, Medic.h, Supplier.h — Unit model & role logic; autonomy hooks. 
-
-Units
-
-State* — Finite State Machine states (moving, attacking, healing, retreating, resupplying, etc.).
-
-EventBus.h, AIEvents.h — Pub/sub for gameplay events. 
-
-EventBus
-
-Definitions.h, Globals.h — Tunables, enums, colors, and shared constants. 
-
-Definitions
-
-🚀 Getting started (quick play)
-
-Run the app—press K to let Commanders start issuing orders. 
-
-main
-
-Left-click to set a target cell for context in the overlay. 
-
-main
-
-Right-click to toggle the Security Map; Visibility overlay auto-disables when Security is on. 
-
-main
-
-Use X/O to simulate a commander being down and watch contingencies/autonomy kick in. 
-
-main
-
-📜 Credits
-
-FreeGLUT for windowing/callbacks. 
-
-glut
-
-GLEW for OpenGL extensions on Windows.
+- **FreeGLUT** — windowing & input callbacks
+- **GLEW** — OpenGL extensions on Windows
